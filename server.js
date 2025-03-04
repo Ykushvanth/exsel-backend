@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
+const axios = require('axios');
 
 const app = express();
 
@@ -241,23 +242,76 @@ app.get('/api/areas/:state/:district', async (req, res) => {
     }
 });
 
-// Get parking lots by state, district, and area
+// Get parking lots by state, district, and area with enhanced features
 app.get('/api/parking-lots/:state/:district/:area', async (req, res) => {
     try {
-        const { data, error } = await supabase
+        console.log('Received request for:', req.params);
+
+        // First get the parking lots with only existing columns
+        const { data: parkingLots, error } = await supabase
             .from('parking_locations')
-            .select('*')
+            .select(`
+                location_id,
+                parking_lot_name,
+                address,
+                total_slots,
+                price_per_hour,
+                opening_time,
+                closing_time,
+                url,
+                state,
+                district,
+                area,
+                latitude,
+                longitude
+            `)
             .eq('state', req.params.state)
             .eq('district', req.params.district)
-            .eq('area', req.params.area)
-            .eq('is_active', true)
-            .order('parking_lot_name');
+            .eq('area', req.params.area);
 
-        if (error) throw error;
-        res.json(data);
+        if (error) {
+            console.error('Supabase error:', error);
+            throw error;
+        }
+
+        console.log('Retrieved parking lots:', parkingLots);
+
+        // Process each parking lot
+        const processedParkingLots = parkingLots.map(lot => ({
+            id: lot.location_id,
+            name: lot.parking_lot_name,
+            address: lot.address,
+            total_slots: lot.total_slots,
+            price_per_hour: lot.price_per_hour,
+            opening_time: lot.opening_time,
+            closing_time: lot.closing_time,
+            url: lot.url,
+            latitude: lot.latitude,
+            longitude: lot.longitude
+        }));
+
+        // Debug logs
+        console.log('Processed parking lots:', processedParkingLots);
+        console.log('First parking lot URL:', processedParkingLots[0]?.url);
+        console.log('First parking lot full details:', processedParkingLots[0]);
+        console.log('First parking lot coordinates:', {
+            lat: parkingLots[0]?.latitude,
+            lng: parkingLots[0]?.longitude
+        });
+
+        res.json({
+            success: true,
+            count: processedParkingLots.length,
+            parking_lots: processedParkingLots
+        });
+
     } catch (error) {
-        console.error('Error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Error fetching parking lots:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to fetch parking lots',
+            message: error.message 
+        });
     }
 });
 
