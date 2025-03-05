@@ -3,6 +3,7 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 const axios = require('axios');
+const nodemailer = require('nodemailer');
 
 const app = express();
 
@@ -10,6 +11,15 @@ const app = express();
 const supabaseUrl = 'https://xseoauyhebklccbhiawp.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhzZW9hdXloZWJrbGNjYmhpYXdwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk0NjkwNjAsImV4cCI6MjA1NTA0NTA2MH0.G-0vB7u33qIozLu2Fc1h3g0P2X2Q69W0PTtc8hHLv00';
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Email configuration
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: 'Slotify722@gmail.com',  // Your Gmail
+        pass: 'axvsdlcdogwflibg'          // Your Gmail app password
+    }
+});
 
 // Middleware
 app.use(cors());
@@ -32,6 +42,8 @@ app.post('/api/signup', async (req, res) => {
             date_of_birth,
             car_number,
             aadhar_number,
+            phone_number,
+            email,
             password
         } = req.body;
 
@@ -58,6 +70,8 @@ app.post('/api/signup', async (req, res) => {
                     date_of_birth,
                     car_number,
                     aadhar_number,
+                    phone_number,
+                    email,
                     password // Note: In production, always hash passwords
                 }
             ])
@@ -134,7 +148,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Add this new endpoint after your existing endpoints
+// Update the user details endpoint
 app.get('/api/user-details', async (req, res) => {
     try {
         // Get the authorization header
@@ -144,13 +158,25 @@ app.get('/api/user-details', async (req, res) => {
             return res.status(401).json({ error: 'No token provided' });
         }
 
-        // Get user ID from localStorage (you should use proper token verification in production)
+        // Get user ID from localStorage
         const userId = req.query.userId;
 
         // Fetch user details from Supabase
         const { data: user, error } = await supabase
             .from('users')
-            .select('*')
+            .select(`
+                id,
+                username,
+                first_name,
+                last_name,
+                gender,
+                date_of_birth,
+                car_number,
+                aadhar_number,
+                phone_number,
+                email,
+                created_at
+            `)
             .eq('id', userId)
             .single();
 
@@ -173,6 +199,8 @@ app.get('/api/user-details', async (req, res) => {
             date_of_birth: user.date_of_birth,
             car_number: user.car_number,
             aadhar_number: user.aadhar_number,
+            phone_number: user.phone_number,
+            email: user.email,
             created_at: user.created_at
         });
 
@@ -329,14 +357,17 @@ app.post('/api/book-slot', async (req, res) => {
             user_id
         } = req.body;
 
-        // First check if parking lot exists and has available slots
+        // Get parking lot details
         const { data: parkingLot, error: parkingError } = await supabase
             .from('parking_locations')
-            .select('available_slots, total_slots, opening_time, closing_time')
+            .select('available_slots, total_slots, opening_time, closing_time, url, price_per_hour')
             .eq('location_id', parking_lot_id)
             .single();
 
-        if (parkingError) throw parkingError;
+        if (parkingError) {
+            console.error('Error fetching parking lot:', parkingError);
+            throw parkingError;
+        }
 
         // Check for overlapping bookings
         const { data: existingBookings, error: bookingsError } = await supabase
@@ -365,7 +396,7 @@ app.post('/api/book-slot', async (req, res) => {
             availableSlot++;
         }
 
-        // Create booking
+        // Create booking with location URL
         const { data: booking, error: bookingError } = await supabase
             .from('slot_booking')
             .insert([{
@@ -380,12 +411,16 @@ app.post('/api/book-slot', async (req, res) => {
                 booked_date: date,
                 slot_number: availableSlot,
                 parking_lot_location: parking_lot_id,
+                location: parkingLot.url,
                 booking_status: 'PENDING'
             }])
             .select()
             .single();
 
-        if (bookingError) throw bookingError;
+        if (bookingError) {
+            console.error('Error creating booking:', bookingError);
+            throw bookingError;
+        }
 
         // Update available slots
         const { error: updateError } = await supabase
@@ -397,11 +432,77 @@ app.post('/api/book-slot', async (req, res) => {
 
         if (updateError) throw updateError;
 
+        // After successful booking, get user email
+        const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('email, first_name')
+            .eq('id', user_id)
+            .single();
+
+        if (userError) throw userError;
+
+        // Prepare and send email
+        const emailContent = {
+            from: 'parksmart.help@gmail.com',
+            to: userData.email,
+            subject: 'ParkSmart - Booking Confirmation',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <h1 style="color: #0A514E; margin: 0;">ParkSmart</h1>
+                        <p style="color: #666;">Your Parking Booking Confirmation</p>
+                    </div>
+
+                    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <p style="margin-top: 0;">Dear ${userData.first_name},</p>
+                        <p>Your parking slot has been successfully booked! Here are your booking details:</p>
+                        
+                        <div style="margin: 20px 0; padding: 15px; background-color: white; border-radius: 8px;">
+                            <p style="margin: 8px 0;"><strong>Booking ID:</strong> ${booking.booking_id}</p>
+                            <p style="margin: 8px 0;"><strong>Car Number:</strong> ${car_number}</p>
+                            <p style="margin: 8px 0;"><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</p>
+                            <p style="margin: 8px 0;"><strong>Arrival Time:</strong> ${actual_arrival_time}</p>
+                            <p style="margin: 8px 0;"><strong>Departure Time:</strong> ${actual_departed_time}</p>
+                            <p style="margin: 8px 0;"><strong>Slot Number:</strong> ${booking.slot_number}</p>
+                        </div>
+
+                        ${booking.location ? `
+                            <div style="text-align: center; margin-top: 20px;">
+                                <a href="${booking.location}" 
+                                   style="background-color: #0A514E; color: white; padding: 10px 20px; 
+                                          text-decoration: none; border-radius: 5px; display: inline-block;"
+                                   target="_blank">
+                                    View Location in Maps
+                                </a>
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+                        <p style="color: #666; font-size: 14px; margin: 0;">
+                            Thank you for choosing ParkSmart! If you need to modify your booking or have any questions, 
+                            please visit our website or contact our support team.
+                        </p>
+                    </div>
+                </div>
+            `
+        };
+
+        try {
+            await transporter.sendMail(emailContent);
+            console.log('Confirmation email sent successfully');
+        } catch (emailError) {
+            console.error('Error sending confirmation email:', emailError);
+            // Don't throw error here - we don't want to fail the booking if email fails
+        }
+
+        // Continue with your existing response
         res.json({ 
             message: 'Booking successful', 
             booking_id: booking.booking_id,
-            slot_number: availableSlot,
-            available_slots: parkingLot.available_slots - 1
+            slot_number: booking.slot_number,
+            available_slots: parkingLot.available_slots - 1,
+            location: booking.location
         });
 
     } catch (error) {
@@ -610,6 +711,44 @@ app.post('/api/extend-booking', async (req, res) => {
 
     } catch (error) {
         console.error('Error in extend-booking endpoint:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Add update user endpoint
+app.put('/api/update-user', async (req, res) => {
+    try {
+        const { userId, phone_number, email } = req.body;
+
+        // Validate input
+        if (!userId || !phone_number || !email) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        // Update user details
+        const { data, error } = await supabase
+            .from('users')
+            .update({ 
+                phone_number,
+                email,
+                updated_at: new Date().toISOString()
+            })
+            .eq('id', userId)
+            .select()
+            .single();
+
+        if (error) {
+            console.error('Update error:', error);
+            return res.status(400).json({ error: 'Failed to update user details' });
+        }
+
+        res.json({
+            message: 'User details updated successfully',
+            user: data
+        });
+
+    } catch (error) {
+        console.error('Server error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
