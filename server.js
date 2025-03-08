@@ -511,17 +511,269 @@ app.post('/api/book-slot', async (req, res) => {
     }
 });
 
+// Add check departed vehicles and send emails endpoint
+app.post('/api/check-departed-vehicles', async (req, res) => {
+    try {
+        // Get all bookings where departed_time is not null
+        const { data: departedBookings, error: bookingsError } = await supabase
+            .from('slot_booking')
+            .select('*')
+            .not('departed_time', 'is', null);
+
+        if (bookingsError) {
+            console.error('Error fetching departed bookings:', bookingsError);
+            throw bookingsError;
+        }
+
+        if (!departedBookings || departedBookings.length === 0) {
+            return res.json({ message: 'No departed vehicles to process' });
+        }
+
+        // Process each departed booking
+        const results = await Promise.all(departedBookings.map(async (booking) => {
+            try {
+                // Get user details using user_id from slot_booking
+                const { data: userData, error: userError } = await supabase
+                    .from('users')
+                    .select('email, first_name')
+                    .eq('id', booking.user_id)
+                    .single();
+
+                if (userError) {
+                    console.error('Error fetching user:', userError);
+                    return { booking_id: booking.booking_id, success: false, error: 'User not found' };
+                }
+
+                // Get parking location details
+                const { data: parkingData } = await supabase
+                    .from('parking_locations')
+                    .select('parking_lot_name')
+                    .eq('location_id', booking.parking_lot_location)
+                    .single();
+
+                // Send departure confirmation email
+                await transporter.sendMail({
+                    from: 'parksmart.help@gmail.com',
+                    to: userData.email,
+                    subject: 'ParkSmart - Departure Confirmation',
+                    html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                            <h1 style="color: #0A514E;">ParkSmart</h1>
+                            <p>Dear ${userData.first_name},</p>
+                            <p>Your vehicle has departed from our parking facility.</p>
+                            <p>Booking Details:</p>
+                            <ul>
+                                <li>Booking ID: ${booking.booking_id}</li>
+                                <li>Location: ${parkingData?.parking_lot_name || 'N/A'}</li>
+                                <li>Slot Number: ${booking.slot_number}</li>
+                                <li>Car Number: ${booking.car_number}</li>
+                                <li>Arrival Time: ${booking.arrived_time}</li>
+                                <li>Departure Time: ${booking.departed_time}</li>
+                            </ul>
+                            <p>Thank you for using ParkSmart! We hope to serve you again.</p>
+                        </div>
+                    `
+                });
+
+                return { booking_id: booking.booking_id, success: true };
+            } catch (error) {
+                console.error('Error processing booking:', error);
+                return { booking_id: booking.booking_id, success: false, error: error.message };
+            }
+        }));
+
+        res.json({
+            message: 'Processed departed vehicles',
+            results
+        });
+
+    } catch (error) {
+        console.error('Server error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Update the booking status endpoint
+app.post('/api/update-booking-status', async (req, res) => {
+    try {
+        const { bookingId, status } = req.body;
+
+        // First get the current booking to get user_id
+        const { data: currentBooking, error: bookingError } = await supabase
+            .from('slot_booking')
+            .select('*')
+            .eq('booking_id', bookingId)
+            .single();
+
+        if (bookingError || !currentBooking) {
+            console.error('Error fetching booking:', bookingError);
+            throw new Error('Booking not found');
+        }
+
+        // Get user details from users table using user_id
+        const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('email, first_name')
+            .eq('id', currentBooking.user_id)
+            .single();
+
+        if (userError || !userData) {
+            console.error('Error fetching user:', userError);
+            throw new Error('User not found');
+        }
+
+        let updateData = {
+            updated_at: new Date().toISOString(),
+            status: 'allow'  // Always set status to 'allow'
+        };
+
+        // Handle different status updates
+        if (status === 'ARRIVED') {
+            updateData = {
+                ...updateData,
+                arrived_time: new Date().toLocaleTimeString('en-US', { 
+                    hour12: false, 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                }),
+                booking_status: 'ONGOING'
+            };
+
+            // Send arrival confirmation email
+            try {
+                await transporter.sendMail({
+                    from: 'parksmart.help@gmail.com',
+                    to: userData.email,
+                    subject: 'ParkSmart - Arrival Confirmation',
+                    html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                            <h1 style="color: #0A514E;">ParkSmart</h1>
+                            <p>Dear ${userData.first_name},</p>
+                            <p>Your arrival has been confirmed.</p>
+                            <p>Booking Details:</p>
+                            <ul>
+                                <li>Booking ID: ${currentBooking.booking_id}</li>
+                                <li>Slot Number: ${currentBooking.slot_number}</li>
+                                <li>Car Number: ${currentBooking.car_number}</li>
+                            </ul>
+                            <p>Thank you for using ParkSmart!</p>
+                        </div>
+                    `
+                });
+                console.log('Arrival confirmation email sent successfully');
+            } catch (emailError) {
+                console.error('Error sending arrival email:', emailError);
+            }
+        } else if (status === 'DEPARTED') {
+            updateData = {
+                ...updateData,
+                booking_status: 'COMPLETED'
+            };
+
+            // Get parking location details
+            const { data: parkingData } = await supabase
+                .from('parking_locations')
+                .select('available_slots, total_slots, parking_lot_name')
+                .eq('location_id', currentBooking.parking_lot_location)
+                .single();
+
+            if (parkingData) {
+                // Update available slots
+                await supabase
+                    .from('parking_locations')
+                    .update({ 
+                        available_slots: Math.min(parkingData.available_slots + 1, parkingData.total_slots)
+                    })
+                    .eq('location_id', currentBooking.parking_lot_location);
+
+                // Send departure confirmation email
+                try {
+                    await transporter.sendMail({
+                        from: 'parksmart.help@gmail.com',
+                        to: userData.email,
+                        subject: 'ParkSmart - Departure Confirmation',
+                        html: `
+                            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                                <h1 style="color: #0A514E;">ParkSmart</h1>
+                                <p>Dear ${userData.first_name},</p>
+                                <p>Your departure has been confirmed.</p>
+                                <p>Booking Details:</p>
+                                <ul>
+                                    <li>Booking ID: ${currentBooking.booking_id}</li>
+                                    <li>Location: ${parkingData.parking_lot_name}</li>
+                                    <li>Slot Number: ${currentBooking.slot_number}</li>
+                                    <li>Car Number: ${currentBooking.car_number}</li>
+                                </ul>
+                                <p>Thank you for using ParkSmart! We hope to serve you again.</p>
+                            </div>
+                        `
+                    });
+                    console.log('Departure confirmation email sent successfully');
+                } catch (emailError) {
+                    console.error('Error sending departure email:', emailError);
+                }
+            }
+        }
+
+        // Update the booking in the database
+        const { data: updatedBooking, error: updateError } = await supabase
+            .from('slot_booking')
+            .update(updateData)
+            .eq('booking_id', bookingId)
+            .select()
+            .single();
+
+        if (updateError) {
+            console.error('Database update error:', updateError);
+            throw new Error(updateError.message);
+        }
+
+        res.json({ 
+            message: `Booking marked as ${status} successfully`, 
+            booking: updatedBooking 
+        });
+
+    } catch (error) {
+        console.error('Error updating booking status:', error);
+        res.status(500).json({ 
+            error: error.message,
+            details: 'Failed to update booking status'
+        });
+    }
+});
+
 // Update the booking history endpoint
 app.get('/api/booking-history/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         console.log('Fetching bookings for user:', userId);
 
-        // First get the bookings
+        // First get the bookings with all relevant time fields
         const { data: bookings, error: bookingsError } = await supabase
             .from('slot_booking')
-            .select('*')
-            .eq('user_id', userId);
+            .select(`
+                booking_id,
+                user_id,
+                actual_arrival_time,
+                actual_departed_time,
+                arrived_time,
+                departed_time,
+                booked_date,
+                slot_number,
+                booking_status,
+                user_name,
+                car_number,
+                aadhar_number,
+                driver_name,
+                driver_aadhar,
+                location,
+                status,
+                parking_lot_location,
+                created_at,
+                updated_at
+            `)
+            .eq('user_id', userId)
+            .order('booked_date', { ascending: false });
 
         if (bookingsError) throw bookingsError;
 
@@ -535,9 +787,29 @@ app.get('/api/booking-history/:userId', async (req, res) => {
                         .eq('location_id', booking.parking_lot_location)
                         .single();
                     
+                    // Calculate status based on times and existing status
+                    let calculatedStatus = booking.status || booking.booking_status;
+                    const currentTime = new Date();
+                    const bookingDate = new Date(booking.booked_date);
+                    const scheduledArrival = new Date(bookingDate);
+                    const [arrivalHours, arrivalMinutes] = booking.actual_arrival_time.split(':');
+                    scheduledArrival.setHours(parseInt(arrivalHours), parseInt(arrivalMinutes));
+
+                    // Only update status if not manually set
+                    if (!booking.status) {
+                        if (currentTime < scheduledArrival) {
+                            calculatedStatus = 'UPCOMING';
+                        } else if (booking.arrived_time && !booking.departed_time) {
+                            calculatedStatus = 'ONGOING';
+                        } else if (booking.departed_time) {
+                            calculatedStatus = 'COMPLETED';
+                        }
+                    }
+
                     return {
                         ...booking,
-                        parking_locations: locationData || null
+                        parking_locations: locationData || null,
+                        status: calculatedStatus
                     };
                 })
             );
@@ -752,6 +1024,18 @@ app.put('/api/update-user', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
+// Add a scheduled task to check departed vehicles every minute
+setInterval(async () => {
+    try {
+        await fetch('http://localhost:3001/api/check-departed-vehicles', {
+            method: 'POST'
+        });
+        console.log('Checked for departed vehicles');
+    } catch (error) {
+        console.error('Error checking departed vehicles:', error);
+    }
+}, 60000); // Run every minute
 
 // Start server
 const PORT = process.env.PORT || 3001;
