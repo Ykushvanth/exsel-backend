@@ -23,9 +23,9 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Temporary solution for testing - remove in production
-const cashfreeApiKey = process.env.CASHFREE_API_KEY || 'TEST10263902c9e2d00785ef7c8d7f9020936201';
-const cashfreeSecretKey = process.env.CASHFREE_SECRET_KEY || 'cfsk_ma_test_807df42feba1aeb1bb1d9e3e415a75e2_14a45c83';
+// Replace Razorpay initialization with Cashfree
+const cashfreeApiKey = 'TEST10263902c9e2d00785ef7c8d7f9020936201';
+const cashfreeSecretKey = 'cfsk_ma_test_807df42feba1aeb1bb1d9e3e415a75e2_14a45c83';
 
 // Middleware
 app.use(cors());
