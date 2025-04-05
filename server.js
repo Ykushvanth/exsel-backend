@@ -457,8 +457,8 @@ app.post('/api/book-slot', async (req, res) => {
     }
 });
 
-// Add check departed vehicles and send emails endpoint
-app.post('/api/check-departed-vehicles', async (req, res) => {
+// Move the check departed vehicles logic into a separate function
+const checkDepartedVehicles = async () => {
     try {
         // Get all bookings where departed_time is not null
         const { data: departedBookings, error: bookingsError } = await supabase
@@ -468,11 +468,11 @@ app.post('/api/check-departed-vehicles', async (req, res) => {
 
         if (bookingsError) {
             console.error('Error fetching departed bookings:', bookingsError);
-            throw bookingsError;
+            return;
         }
 
         if (!departedBookings || departedBookings.length === 0) {
-            return res.json({ message: 'No departed vehicles to process' });
+            return;
         }
 
         // Process each departed booking
@@ -528,16 +528,22 @@ app.post('/api/check-departed-vehicles', async (req, res) => {
             }
         }));
 
-        res.json({
-            message: 'Processed departed vehicles',
-            results
-        });
-
+        console.log('Processed departed vehicles:', results);
     } catch (error) {
-        console.error('Server error:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('Error checking departed vehicles:', error);
     }
-});
+};
+
+// Remove the /api/check-departed-vehicles endpoint since we'll call the function directly
+// Add a scheduled task to check departed vehicles every minute
+setInterval(async () => {
+    try {
+        await checkDepartedVehicles();
+        console.log('Checked for departed vehicles');
+    } catch (error) {
+        console.error('Error checking departed vehicles:', error);
+    }
+}, 60000); // Run every minute
 
 // Update the booking status endpoint
 app.post('/api/update-booking-status', async (req, res) => {
@@ -987,18 +993,6 @@ app.put('/api/update-user', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-
-// Add a scheduled task to check departed vehicles every minute
-setInterval(async () => {
-    try {
-        await fetch('http://localhost:3001/api/check-departed-vehicles', {
-            method: 'POST'
-        });
-        console.log('Checked for departed vehicles');
-    } catch (error) {
-        console.error('Error checking departed vehicles:', error);
-    }
-}, 60000); // Run every minute
 
 // Modify the create-order endpoint
 app.post('/api/create-order', async (req, res) => {
@@ -1530,6 +1524,7 @@ app.post('/api/verify-extension-payment', async (req, res) => {
                     .from('slot_booking')
                     .update({
                         actual_departed_time: extensionInfo.new_departure_time,
+                        slot_number: extensionInfo.new_slot,
                         amount_paid: totalAmount,
                         extension_info: {
                             ...extensionInfo,
@@ -1551,6 +1546,7 @@ app.post('/api/verify-extension-payment', async (req, res) => {
                     success: true,
                     message: 'Payment verified and booking extended successfully',
                     newDepartureTime: extensionInfo.new_departure_time,
+                    newSlotNumber: extensionInfo.new_slot,
                     additionalCost: extensionInfo.additional_cost
                 });
             } else {
