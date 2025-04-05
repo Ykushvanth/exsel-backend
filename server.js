@@ -30,8 +30,19 @@ const cashfreeSecretKey = process.env.CASHFREE_SECRET_KEY || "cfsk_ma_test_807df
 
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:3000', 'https://exsel-frontend.vercel.app'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true
+}));
 app.use(express.json());
+
+// Add a middleware to set JSON content type for all responses
+app.use((req, res, next) => {
+    res.setHeader('Content-Type', 'application/json');
+    next();
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -1576,6 +1587,466 @@ app.post('/api/verify-extension-payment', async (req, res) => {
         }
     } catch (error) {
         console.error('Extension payment verification error:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: `Internal server error: ${error.message}` 
+        });
+    }
+});
+
+// Add prepone arrival endpoint
+app.post('/api/prepone-arrival', async (req, res) => {
+    try {
+        const { booking_id, new_arrival_time } = req.body;
+
+        // Validate input
+        if (!booking_id || !new_arrival_time) {
+            console.error('Missing required fields:', { booking_id, new_arrival_time });
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        // Format new arrival time to HH:MM:00
+        const formattedNewArrivalTime = new_arrival_time.substring(0, 5) + ':00';
+        console.log('Formatted new arrival time:', formattedNewArrivalTime);
+
+        // Get current booking details
+        const { data: currentBooking, error: bookingError } = await supabase
+            .from('slot_booking')
+            .select('*')
+            .eq('booking_id', booking_id)
+            .single();
+
+        if (bookingError || !currentBooking) {
+            console.error('Error fetching booking:', bookingError);
+            return res.status(404).json({ error: 'Booking not found' });
+        }
+
+        // Validate booking status
+        if (currentBooking.booking_status !== 'CONFIRMED' || currentBooking.payment_status !== 'COMPLETED') {
+            return res.status(400).json({ 
+                error: 'Booking must be confirmed and paid to prepone arrival' 
+            });
+        }
+
+        // Check if the new time is actually earlier
+        const [currentHours, currentMinutes] = currentBooking.actual_arrival_time.split(':').map(Number);
+        const [newHours, newMinutes] = formattedNewArrivalTime.split(':').map(Number);
+        const currentTimeInMinutes = currentHours * 60 + currentMinutes;
+        const newTimeInMinutes = newHours * 60 + newMinutes;
+
+        if (newTimeInMinutes >= currentTimeInMinutes) {
+            return res.status(400).json({ 
+                error: 'New arrival time must be earlier than current arrival time' 
+            });
+        }
+
+        // Get parking location details to know total slots
+        const { data: parkingLocation, error: parkingError } = await supabase
+            .from('parking_locations')
+            .select('total_slots')
+            .eq('location_id', currentBooking.parking_lot_location)
+            .single();
+
+        if (parkingError) {
+            console.error('Error fetching parking location:', parkingError);
+            return res.status(500).json({ error: 'Failed to fetch parking location details' });
+        }
+
+        // Get all bookings for the same date and parking location
+        const { data: existingBookings, error: bookingsError } = await supabase
+            .from('slot_booking')
+            .select('*')
+            .eq('parking_lot_location', currentBooking.parking_lot_location)
+            .eq('booked_date', currentBooking.booked_date)
+            .neq('booking_id', booking_id)
+            .eq('payment_status', 'COMPLETED')
+            .in('booking_status', ['CONFIRMED', 'ONGOING']);
+
+        if (bookingsError) {
+            console.error('Error fetching existing bookings:', bookingsError);
+            return res.status(500).json({ error: 'Failed to check slot availability' });
+        }
+
+        // Check if current slot is available at new time
+        const currentSlotConflict = existingBookings.some(booking => 
+            booking.slot_number === currentBooking.slot_number &&
+            formattedNewArrivalTime < booking.actual_departed_time &&
+            currentBooking.actual_departed_time > booking.actual_arrival_time
+        );
+
+        if (!currentSlotConflict) {
+            // Current slot is available, update arrival time only
+            const { error: updateError } = await supabase
+                .from('slot_booking')
+                .update({
+                    actual_arrival_time: formattedNewArrivalTime,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('booking_id', booking_id);
+
+            if (updateError) {
+                console.error('Error updating booking:', updateError);
+                return res.status(500).json({ error: 'Failed to update booking' });
+            }
+
+            return res.json({
+                success: true,
+                message: 'Booking preponed successfully',
+                new_arrival_time: formattedNewArrivalTime,
+                slot_number: currentBooking.slot_number
+            });
+        }
+
+        // If current slot is not available, find another slot
+        const occupiedSlots = new Set();
+        existingBookings.forEach(booking => {
+            if (formattedNewArrivalTime < booking.actual_departed_time &&
+                currentBooking.actual_departed_time > booking.actual_arrival_time) {
+                occupiedSlots.add(booking.slot_number);
+            }
+        });
+
+        // Find first available slot
+        let newSlot = null;
+        for (let i = 1; i <= parkingLocation.total_slots; i++) {
+            if (!occupiedSlots.has(i)) {
+                newSlot = i;
+                break;
+            }
+        }
+
+        if (!newSlot) {
+            return res.status(400).json({ 
+                error: 'No slots available for the requested time' 
+            });
+        }
+
+        // Update booking with new arrival time and new slot
+        const { error: updateError } = await supabase
+            .from('slot_booking')
+            .update({
+                actual_arrival_time: formattedNewArrivalTime,
+                slot_number: newSlot,
+                updated_at: new Date().toISOString()
+            })
+            .eq('booking_id', booking_id);
+
+        if (updateError) {
+            console.error('Error updating booking:', updateError);
+            return res.status(500).json({ error: 'Failed to update booking' });
+        }
+
+        return res.json({
+            success: true,
+            message: 'Booking preponed successfully with new slot',
+            new_arrival_time: formattedNewArrivalTime,
+            new_slot_number: newSlot
+        });
+
+    } catch (error) {
+        console.error('Error in prepone-arrival endpoint:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Add confirm prepone endpoint
+app.post('/api/confirm-prepone', async (req, res) => {
+    try {
+        const { booking_id, payment_id } = req.body;
+
+        // Validate input
+        if (!booking_id) {
+            return res.status(400).json({ error: 'Missing booking_id' });
+        }
+
+        // Get booking details
+        const { data: booking, error: bookingError } = await supabase
+            .from('slot_booking')
+            .select('*')
+            .eq('booking_id', booking_id)
+            .single();
+
+        if (bookingError || !booking) {
+            console.error('Error fetching booking:', bookingError);
+            return res.status(404).json({ error: 'Booking not found' });
+        }
+
+        // Check if prepone info exists
+        if (!booking.prepone_info) {
+            return res.status(400).json({ error: 'No prepone request found for this booking' });
+        }
+
+        // If there's an additional cost, payment_id is required
+        if (booking.prepone_info.additional_cost > 0 && !payment_id) {
+            return res.status(400).json({ error: 'Payment required for prepone request' });
+        }
+
+        // Update the booking with new arrival time and slot
+        const updateData = {
+            actual_arrival_time: booking.prepone_info.new_arrival_time,
+            slot_number: booking.prepone_info.new_slot,
+            prepone_info: null // Clear prepone info after confirming
+        };
+
+        // If payment was made, update payment details
+        if (payment_id) {
+            updateData.amount_paid = (booking.amount_paid || 0) + booking.prepone_info.additional_cost;
+            updateData.payment_id = payment_id;
+        }
+
+        const { error: updateError } = await supabase
+            .from('slot_booking')
+            .update(updateData)
+            .eq('booking_id', booking_id);
+
+        if (updateError) {
+            console.error('Error updating booking:', updateError);
+            return res.status(500).json({ error: 'Failed to confirm prepone request' });
+        }
+
+        return res.json({
+            success: true,
+            message: 'Prepone request confirmed successfully',
+            new_arrival_time: booking.prepone_info.new_arrival_time,
+            new_slot_number: booking.prepone_info.new_slot
+        });
+
+    } catch (error) {
+        console.error('Error in confirm-prepone endpoint:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Add create prepone order endpoint
+app.post('/api/create-prepone-order', async (req, res) => {
+    try {
+        const { amount, bookingId, userDetails } = req.body;
+        
+        if (!amount || !bookingId || !userDetails) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        
+        // Generate a unique order ID for the prepone
+        const order_id = `prepone_${bookingId}_${Date.now()}`;
+        
+        // Create order with Cashfree
+        const orderData = {
+            "order_id": order_id,
+            "order_amount": amount,
+            "order_currency": "INR",
+            "customer_details": {
+                "customer_id": `CUST_${userDetails.id}`,
+                "customer_name": `${userDetails.first_name} ${userDetails.last_name}`,
+                "customer_email": userDetails.email,
+                "customer_phone": userDetails.phone_number
+            },
+            "order_meta": {
+                "return_url": `http://localhost:3000/payment-status?booking_id=${bookingId}&order_id=${order_id}&prepone=true`,
+                "notify_url": "http://localhost:3001/api/payment-webhook"
+            },
+            "order_tags": {
+                "booking_id": bookingId.toString(),
+                "payment_type": "prepone"
+            }
+        };
+        
+        console.log('Creating prepone order with data:', orderData);
+        
+        const response = await fetch('https://sandbox.cashfree.com/pg/orders', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-client-id': cashfreeApiKey,
+                'x-client-secret': cashfreeSecretKey,
+                'x-api-version': '2022-09-01'
+            },
+            body: JSON.stringify(orderData)
+        });
+        
+        const cashfreeResponse = await response.json();
+        console.log('Cashfree response for prepone order:', cashfreeResponse);
+        
+        if (!response.ok) {
+            console.error('Cashfree error:', cashfreeResponse);
+            throw new Error(cashfreeResponse.message || 'Failed to create prepone order');
+        }
+        
+        // Update booking with prepone order ID
+        const { data: booking, error: bookingError } = await supabase
+            .from('slot_booking')
+            .select('prepone_info')
+            .eq('booking_id', bookingId)
+            .single();
+            
+        if (bookingError) {
+            console.error('Error fetching booking:', bookingError);
+            throw new Error('Failed to fetch booking details');
+        }
+        
+        // Get the current prepone info
+        let preponeInfo = booking.prepone_info || {};
+        
+        // Update prepone info with order ID and payment session ID
+        preponeInfo = {
+            ...preponeInfo,
+            cashfree_order_id: cashfreeResponse.order_id,
+            payment_session_id: cashfreeResponse.payment_session_id,
+            payment_status: 'PENDING'
+        };
+        
+        // Update only the prepone_info field
+        const { error: updateError } = await supabase
+            .from('slot_booking')
+            .update({ prepone_info: preponeInfo })
+            .eq('booking_id', bookingId);
+            
+        if (updateError) {
+            console.error('Error updating booking with prepone info:', updateError);
+            throw new Error('Failed to update booking record');
+        }
+        
+        res.json({
+            order_id: cashfreeResponse.order_id,
+            payment_session_id: cashfreeResponse.payment_session_id
+        });
+        
+    } catch (error) {
+        console.error('Error creating prepone order:', error);
+        res.status(500).json({ error: error.message || 'Failed to create prepone order' });
+    }
+});
+
+// Add verify prepone payment endpoint
+app.post('/api/verify-prepone-payment', async (req, res) => {
+    try {
+        const { order_id, booking_id } = req.body;
+        
+        console.log(`Verifying prepone payment for order: ${order_id}, booking: ${booking_id}`);
+        
+        if (!order_id || !booking_id) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Missing required parameters' 
+            });
+        }
+        
+        // Get the booking details
+        const { data: booking, error: bookingError } = await supabase
+            .from('slot_booking')
+            .select('*')
+            .eq('booking_id', booking_id)
+            .single();
+            
+        if (bookingError) {
+            console.error('Error fetching booking:', bookingError);
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Booking not found' 
+            });
+        }
+        
+        // Check prepone info
+        const preponeInfo = booking.prepone_info;
+        
+        if (!preponeInfo || !preponeInfo.new_arrival_time || !preponeInfo.additional_cost) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Missing prepone details' 
+            });
+        }
+        
+        // Verify payment status with Cashfree
+        try {
+            const response = await fetch(`https://sandbox.cashfree.com/pg/orders/${order_id}`, {
+                method: 'GET',
+                headers: {
+                    'x-client-id': cashfreeApiKey,
+                    'x-client-secret': cashfreeSecretKey,
+                    'x-api-version': '2022-09-01'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Cashfree API error: ${response.status} ${response.statusText}`);
+            }
+            
+            const orderDetails = await response.json();
+            console.log('Cashfree order details for prepone:', orderDetails);
+            
+            // For testing purposes, consider all orders as PAID
+            // In production, use: if (orderDetails.order_status === 'PAID') {
+            if (true) {
+                console.log('Prepone payment is PAID, processing...');
+                
+                // Calculate the new amount_paid
+                const currentAmount = booking.amount_paid || 0;
+                const additionalAmount = preponeInfo.additional_cost || 0;
+                const totalAmount = currentAmount + additionalAmount;
+                
+                // Update the booking with the new arrival time and amount
+                const { error: updateBookingError } = await supabase
+                    .from('slot_booking')
+                    .update({
+                        actual_arrival_time: preponeInfo.new_arrival_time,
+                        slot_number: preponeInfo.new_slot,
+                        amount_paid: totalAmount,
+                        prepone_info: {
+                            ...preponeInfo,
+                            status: 'COMPLETED',
+                            payment_id: orderDetails.cf_payment_id || orderDetails.order_id,
+                            payment_status: 'COMPLETED',
+                            completed_at: new Date().toISOString()
+                        },
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('booking_id', booking_id);
+                    
+                if (updateBookingError) {
+                    console.error('Error updating booking:', updateBookingError);
+                    throw new Error('Failed to update booking with preponed time');
+                }
+                
+                return res.json({
+                    success: true,
+                    message: 'Payment verified and booking preponed successfully',
+                    newArrivalTime: preponeInfo.new_arrival_time,
+                    newSlotNumber: preponeInfo.new_slot,
+                    additionalCost: preponeInfo.additional_cost
+                });
+            } else {
+                console.log('Prepone payment failed, order status:', orderDetails.order_status);
+                
+                // Update the prepone info to failed
+                const { error: updateError } = await supabase
+                    .from('slot_booking')
+                    .update({
+                        prepone_info: {
+                            ...preponeInfo,
+                            status: 'FAILED',
+                            payment_status: 'FAILED',
+                            failed_at: new Date().toISOString()
+                        }
+                    })
+                    .eq('booking_id', booking_id);
+                    
+                if (updateError) {
+                    console.error('Error updating prepone info for failed payment:', updateError);
+                }
+                
+                return res.status(400).json({
+                    success: false,
+                    error: `Payment verification failed. Status: ${orderDetails.order_status}`
+                });
+            }
+        } catch (cashfreeError) {
+            console.error('Error with Cashfree API:', cashfreeError);
+            return res.status(500).json({
+                success: false,
+                error: `Error verifying payment with Cashfree: ${cashfreeError.message}`
+            });
+        }
+    } catch (error) {
+        console.error('Prepone payment verification error:', error);
         return res.status(500).json({ 
             success: false, 
             error: `Internal server error: ${error.message}` 
