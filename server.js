@@ -24,6 +24,8 @@ const transporter = nodemailer.createTransport({
 });
 
 // Temporary solution for testing - remove in production
+const cashfreeApiKey = process.env.CASHFREE_API_KEY;
+const cashfreeSecretKey = process.env.CASHFREE_SECRET_KEY;
 
 
 // Middleware
@@ -370,6 +372,7 @@ app.post('/api/book-slot', async (req, res) => {
             parking_lot_id,
             driver_name,
             car_number,
+            rfid_number,
             aadhar_number,
             date,
             actual_arrival_time,
@@ -410,6 +413,7 @@ app.post('/api/book-slot', async (req, res) => {
                 user_id,
                 user_name: driver_name,
                 car_number,
+                rfid_number,
                 aadhar_number,
                 driver_name,
                 driver_aadhar: aadhar_number,
