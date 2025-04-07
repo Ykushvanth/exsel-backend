@@ -31,7 +31,7 @@ const cashfreeSecretKey = process.env.CASHFREE_SECRET_KEY || "cfsk_ma_test_807df
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:3000', 'https://exsel-frontend.vercel.app'],
+    origin: ['http://localhost:3000', 'https://hack-frontend-neon.vercel.app'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true
