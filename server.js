@@ -31,7 +31,7 @@ const cashfreeSecretKey = process.env.CASHFREE_SECRET_KEY || "cfsk_ma_test_807df
 
 // Middleware
 app.use(cors({
-    origin: ['http://localhost:3000', 'https://hack-frontend-neon.vercel.app'],
+    origin: ['http://localhost:3000', 'https://hack-frontend-75td.vercel.app'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true
@@ -1018,7 +1018,7 @@ app.post('/api/create-order', async (req, res) => {
                 "customer_phone": userDetails.phone_number
             },
             "order_meta": {
-                "return_url": `https://hack-frontend-neon.vercel.app/payment-status?booking_id=${booking_id}&order_id=${order_id}`,
+                "return_url": `https://hack-frontend-75td.vercel.app/payment-status?booking_id=${booking_id}&order_id=${order_id}`,
                 "notify_url": "https://exsel-backend-5.onrender.com/api/payment-webhook"
             },
             "order_tags": {
@@ -1379,7 +1379,7 @@ app.post('/api/create-extension-order', async (req, res) => {
                 "customer_phone": userDetails.phone_number
             },
             "order_meta": {
-                "return_url": `https://hack-frontend-neon.vercel.app/payment-status?booking_id=${bookingId}&order_id=${order_id}&extension=true`,
+                "return_url": `https://hack-frontend-75td.vercel.app/payment-status?booking_id=${bookingId}&order_id=${order_id}&extension=true`,
                 "notify_url": "https://exsel-backend-5.onrender.com/api/payment-webhook"
             },
             "order_tags": {
@@ -1837,7 +1837,7 @@ app.post('/api/create-prepone-order', async (req, res) => {
                 "customer_phone": userDetails.phone_number
             },
             "order_meta": {
-                "return_url": `https://hack-frontend-neon.vercel.app/payment-status?booking_id=${bookingId}&order_id=${order_id}&prepone=true`,
+                "return_url": `https://hack-frontend-75td.vercel.app/payment-status?booking_id=${bookingId}&order_id=${order_id}&prepone=true`,
                 "notify_url": "https://exsel-backend-5.onrender.com/api/payment-webhook"
             },
             "order_tags": {
