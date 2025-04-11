@@ -1018,8 +1018,8 @@ app.post('/api/create-order', async (req, res) => {
                 "customer_phone": userDetails.phone_number
             },
             "order_meta": {
-                "return_url": `http://localhost:3000/payment-status?booking_id=${booking_id}&order_id=${order_id}`,
-                "notify_url": "http://localhost:3001/api/payment-webhook"
+                "return_url": `https://hack-frontend-neon.vercel.app/payment-status?booking_id=${booking_id}&order_id=${order_id}`,
+                "notify_url": "https://exsel-backend-5.onrender.com/api/payment-webhook"
             },
             "order_tags": {
                 "booking_id": booking_id.toString()
@@ -1379,8 +1379,8 @@ app.post('/api/create-extension-order', async (req, res) => {
                 "customer_phone": userDetails.phone_number
             },
             "order_meta": {
-                "return_url": `http://localhost:3000/payment-status?booking_id=${bookingId}&order_id=${order_id}&extension=true`,
-                "notify_url": "http://localhost:3001/api/payment-webhook"
+                "return_url": `https://hack-frontend-neon.vercel.app/payment-status?booking_id=${bookingId}&order_id=${order_id}&extension=true`,
+                "notify_url": "https://exsel-backend-5.onrender.com/api/payment-webhook"
             },
             "order_tags": {
                 "booking_id": bookingId.toString(),
@@ -1837,8 +1837,8 @@ app.post('/api/create-prepone-order', async (req, res) => {
                 "customer_phone": userDetails.phone_number
             },
             "order_meta": {
-                "return_url": `http://localhost:3000/payment-status?booking_id=${bookingId}&order_id=${order_id}&prepone=true`,
-                "notify_url": "http://localhost:3001/api/payment-webhook"
+                "return_url": `https://hack-frontend-neon.vercel.app/payment-status?booking_id=${bookingId}&order_id=${order_id}&prepone=true`,
+                "notify_url": "https://exsel-backend-5.onrender.com/api/payment-webhook"
             },
             "order_tags": {
                 "booking_id": bookingId.toString(),
